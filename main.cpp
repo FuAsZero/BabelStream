@@ -40,7 +40,13 @@
 #endif
 
 // Default size of 2^25
+#ifdef MI50
+unsigned int ARRAY_SIZE = (33554432/64*60);	//MI50 has 60CU, while MI60 has 64CU
+//unsigned int ARRAY_SIZE = (33554432*8/64*60);	//MI50 has 60CU, while MI60 has 64CU
+#else
 unsigned int ARRAY_SIZE = 33554432;
+//unsigned int ARRAY_SIZE = (33554432*8);
+#endif
 unsigned int num_times = 100;
 unsigned int deviceIndex = 0;
 bool use_float = false;
@@ -48,6 +54,11 @@ bool triad_only = false;
 bool output_as_csv = false;
 bool mibibytes = false;
 std::string csv_separator = ",";
+
+#ifdef EXT_KERNEL_TIME
+hipEvent_t start_ev, stop_ev;
+float kernel_time = 0.0f;
+#endif
 
 template <typename T>
 void check_solution(const unsigned int ntimes, std::vector<T>& a, std::vector<T>& b, std::vector<T>& c, T& sum);
@@ -184,9 +195,31 @@ void run()
   // Declare timers
   std::chrono::high_resolution_clock::time_point t1, t2;
 
+#ifdef EXT_KERNEL_TIME
+  hipEventCreate(&start_ev);
+  hipEventCreate(&stop_ev);
+#endif
+
   // Main loop
   for (unsigned int k = 0; k < num_times; k++)
   {
+#ifdef EXT_KERNEL_TIME
+    stream->copy();
+//    printf("[LOG] ExtLaunchKernel time: %f.\n", kernel_time);
+    timings[0].push_back(kernel_time/1000);
+
+    stream->mul();
+    timings[1].push_back(kernel_time/1000);
+
+    stream->add();
+    timings[2].push_back(kernel_time/1000);
+
+    stream->triad();
+    timings[3].push_back(kernel_time/1000);
+
+    sum = stream->dot();
+    timings[4].push_back(kernel_time/1000);
+#else
     // Execute Copy
     t1 = std::chrono::high_resolution_clock::now();
     stream->copy();
@@ -216,6 +249,7 @@ void run()
     sum = stream->dot();
     t2 = std::chrono::high_resolution_clock::now();
     timings[4].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+#endif
 
   }
 

@@ -15,6 +15,17 @@
 
 #define IMPLEMENTATION_STRING "HIP"
 
+#define EXT_KERNEL_TIME		//use hipExtLaunchKernelGGL to count kernel execution time more precisely.
+
+#define MI50			//MI50 has 60CU, while MI60 has 64CU
+
+#ifdef EXT_KERNEL_TIME
+#include "hip/hip_ext.h"
+extern hipEvent_t start_ev;
+extern hipEvent_t stop_ev;
+extern float kernel_time;
+#endif
+
 template <class T>
 class HIPStream : public Stream<T>
 {

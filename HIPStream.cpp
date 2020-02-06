@@ -32,6 +32,18 @@ __global__ void triad_kernel(T * a, const T * b, const T * c);
 template <typename T>
 __global__ void dot_kernel(const T * a, const T * b, T * sum, unsigned int array_size);
 
+#ifdef PURE_RDWR
+//#define READ_NUM_BLOCKS DOT_NUM_BLOCKS
+#define WIDTH 4
+#define READ_NUM_BLOCKS (array_size/(4*WIDTH*TBSIZE/sizeof(T)))
+
+template <typename T>
+__global__ void read_kernel(const T * a, T * sum, unsigned int array_size);
+
+template <typename T>
+__global__ void write_kernel(T * d);
+#endif
+
 void check_error(void)
 {
   hipError_t err = hipGetLastError();
@@ -86,6 +98,16 @@ HIPStream<T>::HIPStream(const unsigned int ARRAY_SIZE, const int device_index)
   check_error();
   hipMalloc(&d_sum, DOT_NUM_BLOCKS*sizeof(T));
   check_error();
+
+#ifdef PURE_RDWR
+  hipMalloc(&d_d, ARRAY_SIZE*sizeof(T));
+  check_error();
+
+  sums_a = (T*)malloc(sizeof(T) * READ_NUM_BLOCKS);
+
+  hipMalloc(&sum_a, READ_NUM_BLOCKS * sizeof(T));
+  check_error();
+#endif
 }
 
 
@@ -102,6 +124,14 @@ HIPStream<T>::~HIPStream()
   check_error();
   hipFree(d_sum);
   check_error();
+
+#ifdef PURE_RDWR
+  hipFree(d_d);
+  check_error();
+  free(sums_a);
+  hipFree(sum_a);
+  check_error();
+#endif
 }
 
 
@@ -135,6 +165,136 @@ void HIPStream<T>::read_arrays(std::vector<T>& a, std::vector<T>& b, std::vector
   check_error();
 }
 
+template <>
+__global__ void read_kernel<float>(const float * a, float * sum, unsigned int array_size)
+{
+  int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * 4; //vec4 float to assemble a dword_x4
+  __shared__ float threadBlock_sum[TBSIZE];
+
+  a += i;
+
+  threadBlock_sum[hipThreadIdx_x] = 0.0f;
+  const int stride = hipBlockDim_x * hipGridDim_x * 4;
+
+  float v0 = a[0];
+  float v1 = a[1];
+  float v2 = a[2];
+  float v3 = a[3];
+
+  float v4 = v0+v1;
+  float v5 = v2+v3;
+  threadBlock_sum[hipThreadIdx_x] += v4+v5;
+
+  //fake loop to cheat compiler not to remove pure read kernel
+  int offset = hipBlockDim_x/2;
+  for(; offset > hipBlockDim_x/2; offset /= 2) 
+  {
+    __syncthreads();
+    if(hipThreadIdx_x < offset)
+    {
+        threadBlock_sum[hipThreadIdx_x] += threadBlock_sum[hipThreadIdx_x + offset];
+    }
+  }
+
+  if(hipThreadIdx_x == 0)
+    sum[hipBlockIdx_x] = threadBlock_sum[0];
+}
+
+template <>
+__global__ void read_kernel<double>(const double * a, double * sum, unsigned int array_size)
+{
+  int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * 2; //vec2 double to assemble a dword_x4
+  __shared__ float threadBlock_sum[TBSIZE];
+
+  a += i;
+
+  double v0 = a[0];
+  double v1 = a[1];
+
+  double v4 = v0+v1;
+  threadBlock_sum[hipThreadIdx_x] = v4;
+
+  //fake loop to cheat compiler not to remove pure read kernel
+  int offset = hipBlockDim_x/2;
+  for(; offset > hipBlockDim_x/2; offset /= 2)
+  {
+    if(hipThreadIdx_x < offset)
+    {
+      threadBlock_sum[hipThreadIdx_x] += threadBlock_sum[hipThreadIdx_x + offset];
+    }
+  }
+
+  if(hipThreadIdx_x == 0)
+    sum[hipBlockIdx_x] = threadBlock_sum[0];
+}
+
+template <class T>
+T HIPStream<T>::read()
+{
+//  int readNumBlocks = array_size/(4*4*TBSIZE/sizeof(T));
+  int readNumBlocks = READ_NUM_BLOCKS;
+#ifdef EXT_KERNEL_TIME
+  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(read_kernel<T>), dim3(readNumBlocks), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, sum_a, array_size);
+  hipEventSynchronize(stop_ev);
+  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+#else
+//  hipLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_c);
+  hipLaunchKernelGGL(HIP_KERNEL_NAME(read_kernel<T>), dim3(readNumBlocks), dim3(TBSIZE), 0, 0, d_a, sum_a, array_size);
+  check_error();
+  hipDeviceSynchronize();
+  check_error();
+#endif
+
+  hipMemcpy(sums_a, sum_a, readNumBlocks*sizeof(T), hipMemcpyDeviceToHost);
+  check_error();
+
+  T sum = 0.0;
+  for(int i = 0; i < readNumBlocks; ++i)
+  {
+    sum = sums_a[i];
+  }
+
+  return sum;
+}
+
+template <>
+__global__ void write_kernel<float>(float * d)
+{
+  const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * WIDTH; //vec4 float to assemble a dword_x4
+
+  //address offset explicitly, to avoid redundant address calc ISA
+  d += i;
+
+  d[0] = hipThreadIdx_x;
+  d[1] = hipThreadIdx_x;
+  d[2] = hipThreadIdx_x;
+  d[3] = hipThreadIdx_x;
+}
+
+template <>
+__global__ void write_kernel<double>(double *d)
+{
+  const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * WIDTH/2; //vec2 double to assemble a dword_x4
+  d += i;
+
+  d[0] = hipThreadIdx_x;
+  d[1] = hipThreadIdx_x;
+}
+
+template <class T>
+void HIPStream<T>::write()
+{
+#ifdef EXT_KERNEL_TIME
+  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(write_kernel<T>), dim3(array_size/(4*WIDTH*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_d);
+  hipEventSynchronize(stop_ev);
+  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+#else
+  hipLaunchKernelGGL(HIP_KERNEL_NAME(write_kernel<T>), dim3(array_size/(4*WIDTH*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_d);
+  check_error();
+  hipDeviceSynchronize();
+  check_error();
+#endif
+}
 
 template <>
 __global__ void copy_kernel<float>(const float * a, float * c)

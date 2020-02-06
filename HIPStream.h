@@ -42,11 +42,26 @@ class HIPStream : public Stream<T>
     T *d_c;
     T *d_sum;
 
+#ifdef PURE_RDWR
+    // Device side pointer to write kernel array
+    T *d_d;
+
+    // Host array for partial sums for read kernel
+    T *sums_a;
+
+    // Device side pointer to array for read kernel
+    T *sum_a;
+#endif
 
   public:
 
     HIPStream(const unsigned int, const int);
     ~HIPStream();
+
+#ifdef PURE_RDWR
+    virtual void write() override;
+    virtual T read() override;
+#endif
 
     virtual void copy() override;
     virtual void add() override;
@@ -56,5 +71,4 @@ class HIPStream : public Stream<T>
 
     virtual void init_arrays(T initA, T initB, T initC) override;
     virtual void read_arrays(std::vector<T>& a, std::vector<T>& b, std::vector<T>& c) override;
-
 };

@@ -42,10 +42,8 @@
 // Default size of 2^25
 #ifdef MI50
 unsigned int ARRAY_SIZE = (33554432/64*60);	//MI50 has 60CU, while MI60 has 64CU
-//unsigned int ARRAY_SIZE = (33554432*8/64*60);	//MI50 has 60CU, while MI60 has 64CU
 #else
 unsigned int ARRAY_SIZE = 33554432;
-//unsigned int ARRAY_SIZE = (33554432*8);
 #endif
 unsigned int num_times = 100;
 unsigned int deviceIndex = 0;
@@ -147,6 +145,10 @@ void run()
   // Result of the Dot kernel
   T sum;
 
+#ifdef PURE_RDWR
+  std::vector<T> d(ARRAY_SIZE);
+  T sum_a;
+#endif
   Stream<T> *stream;
 
 #if defined(CUDA)
@@ -190,7 +192,11 @@ void run()
   stream->init_arrays(startA, startB, startC);
 
   // List of times
+#ifdef PURE_RDWR
+  std::vector<std::vector<double>> timings(7);
+#else
   std::vector<std::vector<double>> timings(5);
+#endif
 
   // Declare timers
   std::chrono::high_resolution_clock::time_point t1, t2;
@@ -219,6 +225,14 @@ void run()
 
     sum = stream->dot();
     timings[4].push_back(kernel_time/1000);
+
+#ifdef PURE_RDWR
+    sum_a = stream->read();
+    timings[5].push_back(kernel_time/1000);
+
+    stream->write();
+    timings[6].push_back(kernel_time/1000);
+#endif
 #else
     // Execute Copy
     t1 = std::chrono::high_resolution_clock::now();
@@ -249,6 +263,18 @@ void run()
     sum = stream->dot();
     t2 = std::chrono::high_resolution_clock::now();
     timings[4].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+
+#ifdef PURE_RDWR
+    t1 = std::chrono::high_resolution_clock::now();
+    sum_a = stream->read();
+    t2 = std::chrono::high_resolution_clock::now();
+    timings[5].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+
+    t1 = std::chrono::high_resolution_clock::now();
+    stream->write();
+    t2 = std::chrono::high_resolution_clock::now();
+    timings[6].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+#endif
 #endif
 
   }
@@ -283,8 +309,23 @@ void run()
   }
 
 
+#ifdef PURE_RDWR
+  std::string labels[7] = {"Copy", "Mul", "Add", "Triad", "Dot", "Read", "Write"};
 
+  size_t sizes[7] = {
+    2 * sizeof(T) * ARRAY_SIZE,
+    2 * sizeof(T) * ARRAY_SIZE,
+    3 * sizeof(T) * ARRAY_SIZE,
+    3 * sizeof(T) * ARRAY_SIZE,
+    2 * sizeof(T) * ARRAY_SIZE,
+    sizeof(T) * ARRAY_SIZE,
+    sizeof(T) * ARRAY_SIZE
+  };
+
+  for (int i = 0; i < 7; i++)
+#else
   std::string labels[5] = {"Copy", "Mul", "Add", "Triad", "Dot"};
+
   size_t sizes[5] = {
     2 * sizeof(T) * ARRAY_SIZE,
     2 * sizeof(T) * ARRAY_SIZE,
@@ -294,6 +335,7 @@ void run()
   };
 
   for (int i = 0; i < 5; i++)
+#endif
   {
     // Get min/max; ignore the first result
     auto minmax = std::minmax_element(timings[i].begin()+1, timings[i].end());
@@ -370,6 +412,10 @@ void run_triad()
   std::vector<T> a(ARRAY_SIZE);
   std::vector<T> b(ARRAY_SIZE);
   std::vector<T> c(ARRAY_SIZE);
+
+#ifdef PURE_RDWR
+  std::vector<T> d(ARRAY_SIZE);
+#endif
 
   Stream<T> *stream;
 

@@ -16,6 +16,8 @@
 #define startC (0.0)
 #define startScalar (0.4)
 
+#define PURE_RDWR	//to test pure read, write performance
+
 template <class T>
 class Stream
 {
@@ -31,10 +33,14 @@ class Stream
     virtual void triad() = 0;
     virtual T dot() = 0;
 
+#ifdef PURE_RDWR
+    virtual T read() = 0;
+    virtual void write() = 0;
+#endif
+
     // Copy memory between host and device
     virtual void init_arrays(T initA, T initB, T initC) = 0;
     virtual void read_arrays(std::vector<T>& a, std::vector<T>& b, std::vector<T>& c) = 0;
-
 };
 
 

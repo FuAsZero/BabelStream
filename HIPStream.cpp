@@ -171,19 +171,14 @@ __global__ void read_kernel<float>(const float * a, float * sum, unsigned int ar
   int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * 4; //vec4 float to assemble a dword_x4
   __shared__ float threadBlock_sum[TBSIZE];
 
-  a += i;
+  float4 * src = (float4 *) (a+i);
+  float4 temp;
+  float sum_0, sum_1;
 
-  threadBlock_sum[hipThreadIdx_x] = 0.0f;
-  const int stride = hipBlockDim_x * hipGridDim_x * 4;
-
-  float v0 = a[0];
-  float v1 = a[1];
-  float v2 = a[2];
-  float v3 = a[3];
-
-  float v4 = v0+v1;
-  float v5 = v2+v3;
-  threadBlock_sum[hipThreadIdx_x] += v4+v5;
+  temp = *src;
+  sum_0 = temp.x + temp.y;
+  sum_1 = temp.z + temp.w;
+  threadBlock_sum[hipThreadIdx_x] = sum_0 + sum_1;
 
   //fake loop to cheat compiler not to remove pure read kernel
   int offset = hipBlockDim_x/2;
@@ -206,13 +201,9 @@ __global__ void read_kernel<double>(const double * a, double * sum, unsigned int
   int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * 2; //vec2 double to assemble a dword_x4
   __shared__ float threadBlock_sum[TBSIZE];
 
-  a += i;
-
-  double v0 = a[0];
-  double v1 = a[1];
-
-  double v4 = v0+v1;
-  threadBlock_sum[hipThreadIdx_x] = v4;
+  double2 * src = (double2 *) (a+i);
+  double2 temp = *src;
+  threadBlock_sum[hipThreadIdx_x] = temp.x + temp.y;
 
   //fake loop to cheat compiler not to remove pure read kernel
   int offset = hipBlockDim_x/2;
@@ -263,22 +254,17 @@ __global__ void write_kernel<float>(float * d)
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * WIDTH; //vec4 float to assemble a dword_x4
 
   //address offset explicitly, to avoid redundant address calc ISA
-  d += i;
-
-  d[0] = hipThreadIdx_x;
-  d[1] = hipThreadIdx_x;
-  d[2] = hipThreadIdx_x;
-  d[3] = hipThreadIdx_x;
+  float4 * dst = (float4 *) (d+i);
+  *dst = (float4) {0.0f, 0.0f, 0.0f, 0.0f};
 }
 
 template <>
 __global__ void write_kernel<double>(double *d)
 {
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * WIDTH/2; //vec2 double to assemble a dword_x4
-  d += i;
 
-  d[0] = hipThreadIdx_x;
-  d[1] = hipThreadIdx_x;
+  double2 * dst = (double2 *) (d+i);
+  *dst = (double2) {0.0, 0.0};
 }
 
 template <class T>
@@ -302,33 +288,21 @@ __global__ void copy_kernel<float>(const float * a, float * c)
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * 4; //vec4 float to assemble a dword_x4
 
   //address offset explicitly, to avoid redundant address calc ISA
-  a += i;
-  c += i;
+  float4 *src = (float4 *) (a+i);
+  float4 *dst = (float4 *) (c+i);
 
-  //read data in dword_x4 order, with fixed array index
-  float v0 = a[0];
-  float v1 = a[1];
-  float v2 = a[2];
-  float v3 = a[3];
-
-  c[0] = v0;
-  c[1] = v1;
-  c[2] = v2;
-  c[3] = v3;
+  *dst = *src;
 }
 
 template <>
 __global__ void copy_kernel<double>(const double *a, double *c)
 {
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * 2; //vec2 double to assemble a dword_x4
-  a += i;
-  c += i;
 
-  double v0 = a[0];
-  double v1 = a[1];
+  double2 * src = (double2 *) (a+i);
+  double2 * dst = (double2 *) (c+i);
 
-  c[0] = v0;
-  c[1] = v1;
+  *dst = *src;
 }
 #if 0
 template <typename T>
@@ -361,18 +335,10 @@ __global__ void mul_kernel<float>(float * b, const float * c)
   const float scalar = startScalar;
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*4;
 
-  b += i;
-  c += i;
+  float4 * src = (float4 *) (c+i);
+  float4 * dst = (float4 *) (b+i);
 
-  float v0 = c[0];
-  float v1 = c[1];
-  float v2 = c[2];
-  float v3 = c[3];
-
-  b[0] = scalar*v0;
-  b[1] = scalar*v1;
-  b[2] = scalar*v2;
-  b[3] = scalar*v3;
+  *dst = *src * scalar;
 }
 
 template <>
@@ -381,14 +347,10 @@ __global__ void mul_kernel<double>(double * b, const double * c)
   const double scalar = startScalar;
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*2;
 
-  b += i;
-  c += i;
+  double2 * src = (double2 *) (c+i);
+  double2 * dst = (double2 *) (b+i);
 
-  double v0 = c[0];
-  double v1 = c[1];
-
-  b[0] = scalar*v0;
-  b[1] = scalar*v1;
+  *dst = *src * scalar;
 }
 #if 0
 template <typename T>
@@ -421,24 +383,11 @@ __global__ void add_kernel<float>(const float * a, const float * b, float * c)
 {
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*4;
 
-  a += i;
-  b += i;
-  c += i;
+  float4 * src_a = (float4 *) (a+i);
+  float4 * src_b = (float4 *) (b+i);
+  float4 * dst   = (float4 *) (c+i);
 
-  float v0 = a[0];
-  float v1 = a[1];
-  float v2 = a[2];
-  float v3 = a[3];
-
-  float v4 = b[0];
-  float v5 = b[1];
-  float v6 = b[2];
-  float v7 = b[3];
-  
-  c[0] = v0 + v4;
-  c[1] = v1 + v5;
-  c[2] = v2 + v6;
-  c[3] = v3 + v7;
+  *dst = *src_a + *src_b;
 }
 
 template <>
@@ -446,18 +395,11 @@ __global__ void add_kernel<double>(const double * a, const double * b, double * 
 {
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*2;
 
-  a += i;
-  b += i;
-  c += i;
+  double2 * src_a = (double2 *) (a+i);
+  double2 * src_b = (double2 *) (b+i);
+  double2 * dst   = (double2 *) (c+i);
 
-  double v0 = a[0];
-  double v1 = a[1];
-
-  double v4 = b[0];
-  double v5 = b[1];
-
-  c[0] = v0 + v4;
-  c[1] = v1 + v5;
+  *dst = *src_a + *src_b;
 }
 
 #if 0
@@ -491,24 +433,11 @@ __global__ void triad_kernel<float>(float * a, const float * b, const float * c)
   const float scalar = startScalar;
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*4;
 
-  a += i;
-  b += i;
-  c += i;
+  float4 * src_c = (float4 *) (c+i);
+  float4 * src_b = (float4 *) (b+i);
+  float4 * dst   = (float4 *) (a+i);
 
-  float v0 = c[0];
-  float v1 = c[1];
-  float v2 = c[2];
-  float v3 = c[3];
-
-  float v4 = b[0];
-  float v5 = b[1];
-  float v6 = b[2];
-  float v7 = b[3];
-
-  a[0] = v4 + scalar*v0;
-  a[1] = v5 + scalar*v1;
-  a[2] = v6 + scalar*v2;
-  a[3] = v7 + scalar*v3;
+  *dst = *src_b + *src_c * scalar;
 }
 
 template <>
@@ -517,18 +446,11 @@ __global__ void triad_kernel<double>(double * a, const double * b, const double 
   const double scalar = startScalar;
   const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*2;
 
-  a += i;
-  b += i;
-  c += i;
+  double2 * src_c = (double2 *) (c+i);
+  double2 * src_b = (double2 *) (b+i);
+  double2 * dst   = (double2 *) (a+i);
 
-  double v0 = c[0];
-  double v1 = c[1];
-
-  double v4 = b[0];
-  double v5 = b[1];
-
-  a[0] = v4 + scalar*v0;
-  a[1] = v5 + scalar*v1;
+  *dst = *src_b + *src_c * scalar;
 }
 
 #if 0
@@ -565,33 +487,19 @@ __global__ void dot_kernel<float>(const float * a, const float * b, float * sum,
   int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*4;
   const size_t local_i = hipThreadIdx_x;
 
-  a += i;
-  b += i;
-
-  float v0, v1, v2, v3, v4, v5, v6, v7;
-  float v8, v9, v10, v11, v12, v13, v14;
+  float4 * src_a = (float4 *) (a+i);
+  float4 * src_b = (float4 *) (b+i);
 
   tb_sum[local_i] = 0.0f;
-  const int stride = hipBlockDim_x * hipGridDim_x * 4;
-  for( ; i < array_size; i += stride, a += stride, b += stride ) 
+  float4 temp = {0.0f, 0.0f, 0.0f, 0.0f}; 
+  float sum_0, sum_1;
+  const int stride = hipBlockDim_x * hipGridDim_x;
+  for( ; i < array_size; i += 4*stride, src_a += stride, src_b += stride)
   {
-    v0 = a[0];
-    v1 = a[1];
-    v2 = a[2];
-    v3 = a[3];
-    v4 = b[0];
-    v5 = b[1];
-    v6 = b[2];
-    v7 = b[3];
-
-    v8  = v0 * v4;
-    v9  = v1 * v5;
-    v10 = v2 * v6;
-    v11 = v3 * v7;
-    v12 = v8  + v9;
-    v13 = v10 + v11;
-    v14 = v12 + v13;
-    tb_sum[local_i] += v14;
+    temp = *src_a * *src_b;
+    sum_0 = temp.x + temp.y;
+    sum_1 = temp.z + temp.w;
+    tb_sum[local_i] += sum_0 + sum_1;
   }
 
   for(int offset = hipBlockDim_x / 2; offset > 0; offset /= 2)
@@ -615,26 +523,17 @@ __global__ void dot_kernel<double>(const double * a, const double * b, double * 
   int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x) * 2;
   const size_t local_i = hipThreadIdx_x;
 
-  a += i;
-  b += i;
+  double2 * src_a = (double2 *) (a+i);
+  double2 * src_b = (double2 *) (b+i);
 
-  double v0, v1, v2, v3, v4, v5, v6, v7;
-  double v8, v9, v10, v11, v12, v13, v14;
+  double2 temp = {0.0, 0.0};
 
   tb_sum[local_i] = 0.0;
-  const int stride = hipBlockDim_x * hipGridDim_x * 2;
-  for( ; i < array_size; i += stride, a += stride, b += stride ) 
+  const int stride = hipBlockDim_x * hipGridDim_x;
+  for( ; i < array_size; i += 2*stride, src_a += stride, src_b += stride)
   {
-    v0 = a[0];
-    v1 = a[1];
-
-    v4 = b[0];
-    v5 = b[1];
-
-    v8 = v0 * v4;
-    v9 = v1 * v5;
-
-    tb_sum[local_i] += v8+v9;
+    temp = *src_a * *src_b;
+    tb_sum[local_i] += temp.x + temp.y;
   }
 
   for(int offset = hipBlockDim_x / 2; offset > 0; offset /= 2)

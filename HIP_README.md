@@ -51,4 +51,4 @@ We have dwordx2 support, so you can find double type performs better than float 
 7. Summary:
 * let compiler generate as less address calculation ISA as possible;
 * let compiler easily know it can assemble consecutive load/store into dwordx4 operator, ex. using datatype float4/double2;
-* HW support at most 1024 threads per WorkGroup, but more threads indicate less HW resource;
+* HW support at most 1024 threads per WorkGroup, but more threads indicate less HW resource per thread;

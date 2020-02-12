@@ -18,42 +18,37 @@ Original TBSIZE (threadBlock size) is 1024, here we suggest to use 128.
 Each WorkGroup will be dispatched on one SIMD, so when you change DOT_NUM_BLOCKS (number of WorkGroups for DOT kernel) from 256 to 240, you can see performance improvement.
 And please remember to change ARRAY_SIZE compliant with DOT_NUM_BLOCKS.
 
-5. Compiler can do some optimization works, but compiler may not be as smart as you expected.
-Take add_kernel as an example, to generate dwordx4 load/store ISA, you may write 4 continous float load/store as:
+5. Take add_kernel as an example, to generate dwordx4 load/store ISA, you can change your code as:
 ```cpp
-  c[i]   = a[i]   + b[i];
-  c[i+1] = a[i+1] + b[i+1];
-  c[i+2] = a[i+2] + b[i+2];
-  c[i+3] = a[i+3] + b[i+3];
+template <>
+__global__ void add_kernel<float>(const float * a, const float * b, float * c)
+{
+  const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*4;
+
+  float4 * src_a = (float4 *) (a+i);
+  float4 * src_b = (float4 *) (b+i);
+  float4 * dst   = (float4 *) (c+i);
+
+  *dst = *src_a + *src_b;
+}
 ```
-If you are not satisfied with performance, you can change your code as:
+6. If you are dealing with double datatype, you need 2 double to assemble a dwordx4 load/store, like:
 ```cpp
-  //explicit address offset can avoid redundant address calculation ISA.
-  a += i;
-  b += i;
-  c += i;
+template <>
+__global__ void add_kernel<double>(const double * a, const double * b, double * c)
+{
+  const int i = (hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x)*2;
 
-  //compiler can generate dwordx4 load to vGPR for the 4 consecutive dword load, as this is more straightforward for compiler to optimize
-  float v0 = a[0];
-  float v1 = a[1];
-  float v2 = a[2];
-  float v3 = a[3];
+  double2 * src_a = (double2 *) (a+i);
+  double2 * src_b = (double2 *) (b+i);
+  double2 * dst   = (double2 *) (c+i);
 
-  float v4 = b[0];
-  float v5 = b[1];
-  float v6 = b[2];
-  float v7 = b[3];
-
-  c[0] = v0 + v4;
-  c[1] = v1 + v5;
-  c[2] = v2 + v6;
-  c[3] = v3 + v7;
+  *dst = *src_a + *src_b;
+}
 ```
-6. If you are dealing with double datatype, you need 2 double to assemble a dwordx4 load/store. 
 We have dwordx2 support, so you can find double type performs better than float type in original single data operator.
 
 7. Summary:
 * let compiler generate as less address calculation ISA as possible;
-* let compiler easily know it can assemble consecutive load/store into dwordx4 operator;
-* HW support at most 1024 threads per WorkGroup, but more threads indicate less HW resource;
-* don't expect compiler can do all optimizations you want, try to 'tell' compiler your idea.
+* let compiler easily know it can assemble consecutive load/store into dwordx4 operator, ex. using datatype float4/double2;
+* HW support at most 1024 threads per WorkGroup, but more threads indicate less HW resource per thread;

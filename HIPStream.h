@@ -15,16 +15,12 @@
 
 #define IMPLEMENTATION_STRING "HIP"
 
-#define EXT_KERNEL_TIME		//use hipExtLaunchKernelGGL to count kernel execution time more precisely.
-
-#define MI50			//MI50 has 60CU, while MI60 has 64CU
-
-#ifdef EXT_KERNEL_TIME
+#include <hip/hip_runtime.h>
 #include "hip/hip_ext.h"
+
 extern hipEvent_t start_ev;
 extern hipEvent_t stop_ev;
 extern float kernel_time;
-#endif
 
 template <class T>
 class HIPStream : public Stream<T>
@@ -32,6 +28,12 @@ class HIPStream : public Stream<T>
   protected:
     // Size of arrays
     unsigned int array_size;
+
+    // timing mode
+    unsigned int timing_mode;
+
+    // Compute Unit number
+    unsigned int cu_num;
 
     // Host array for partial sums for dot kernel
     T *sums;
@@ -55,7 +57,7 @@ class HIPStream : public Stream<T>
 
   public:
 
-    HIPStream(const unsigned int, const int);
+    HIPStream(const unsigned int, const int, const unsigned int, const unsigned int);
     ~HIPStream();
 
 #ifdef PURE_RDWR

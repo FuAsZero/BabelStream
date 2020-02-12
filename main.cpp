@@ -40,23 +40,19 @@
 #endif
 
 // Default size of 2^25
-#ifdef MI50
-unsigned int ARRAY_SIZE = (33554432/64*60);	//MI50 has 60CU, while MI60 has 64CU
-#else
 unsigned int ARRAY_SIZE = 33554432;
-#endif
 unsigned int num_times = 100;
 unsigned int deviceIndex = 0;
 bool use_float = false;
 bool triad_only = false;
 bool output_as_csv = false;
 bool mibibytes = false;
+
+unsigned int timing = 0;			//0: HOST+Device time, 1: Device Kernel time, 2: ExtLaunch Kernel time
+unsigned int compunits = 64;                    //64: default compute unit number, MI50-60CU
+
 std::string csv_separator = ",";
 
-#ifdef EXT_KERNEL_TIME
-hipEvent_t start_ev, stop_ev;
-float kernel_time = 0.0f;
-#endif
 
 template <typename T>
 void check_solution(const unsigned int ntimes, std::vector<T>& a, std::vector<T>& b, std::vector<T>& c, T& sum);
@@ -157,7 +153,7 @@ void run()
 
 #elif defined(HIP)
   // Use the HIP implementation
-  stream = new HIPStream<T>(ARRAY_SIZE, deviceIndex);
+  stream = new HIPStream<T>(ARRAY_SIZE, deviceIndex, timing, compunits);
 
 #elif defined(HC)
   // Use the HC implementation
@@ -201,82 +197,85 @@ void run()
   // Declare timers
   std::chrono::high_resolution_clock::time_point t1, t2;
 
-#ifdef EXT_KERNEL_TIME
-  hipEventCreate(&start_ev);
-  hipEventCreate(&stop_ev);
-#endif
+  if(timing > 0)
+  {
+    hipEventCreate(&start_ev);
+    hipEventCreate(&stop_ev);
+  }
 
   // Main loop
   for (unsigned int k = 0; k < num_times; k++)
   {
-#ifdef EXT_KERNEL_TIME
-    stream->copy();
+    if(timing > 0) //Device kernel timing
+    {
+      stream->copy();
 //    printf("[LOG] ExtLaunchKernel time: %f.\n", kernel_time);
-    timings[0].push_back(kernel_time/1000);
+      timings[0].push_back(kernel_time/1000);
 
-    stream->mul();
-    timings[1].push_back(kernel_time/1000);
+      stream->mul();
+      timings[1].push_back(kernel_time/1000);
 
-    stream->add();
-    timings[2].push_back(kernel_time/1000);
+      stream->add();
+      timings[2].push_back(kernel_time/1000);
 
-    stream->triad();
-    timings[3].push_back(kernel_time/1000);
+      stream->triad();
+      timings[3].push_back(kernel_time/1000);
 
-    sum = stream->dot();
-    timings[4].push_back(kernel_time/1000);
-
-#ifdef PURE_RDWR
-    sum_a = stream->read();
-    timings[5].push_back(kernel_time/1000);
-
-    stream->write();
-    timings[6].push_back(kernel_time/1000);
-#endif
-#else
-    // Execute Copy
-    t1 = std::chrono::high_resolution_clock::now();
-    stream->copy();
-    t2 = std::chrono::high_resolution_clock::now();
-    timings[0].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
-
-    // Execute Mul
-    t1 = std::chrono::high_resolution_clock::now();
-    stream->mul();
-    t2 = std::chrono::high_resolution_clock::now();
-    timings[1].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
-
-    // Execute Add
-    t1 = std::chrono::high_resolution_clock::now();
-    stream->add();
-    t2 = std::chrono::high_resolution_clock::now();
-    timings[2].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
-
-    // Execute Triad
-    t1 = std::chrono::high_resolution_clock::now();
-    stream->triad();
-    t2 = std::chrono::high_resolution_clock::now();
-    timings[3].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
-
-    // Execute Dot
-    t1 = std::chrono::high_resolution_clock::now();
-    sum = stream->dot();
-    t2 = std::chrono::high_resolution_clock::now();
-    timings[4].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+      sum = stream->dot();
+      timings[4].push_back(kernel_time/1000);
 
 #ifdef PURE_RDWR
-    t1 = std::chrono::high_resolution_clock::now();
-    sum_a = stream->read();
-    t2 = std::chrono::high_resolution_clock::now();
-    timings[5].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+      sum_a = stream->read();
+      timings[5].push_back(kernel_time/1000);
 
-    t1 = std::chrono::high_resolution_clock::now();
-    stream->write();
-    t2 = std::chrono::high_resolution_clock::now();
-    timings[6].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+      stream->write();
+      timings[6].push_back(kernel_time/1000);
 #endif
-#endif
-
+    }
+    else
+    {
+      // Execute Copy
+      t1 = std::chrono::high_resolution_clock::now();
+      stream->copy();
+      t2 = std::chrono::high_resolution_clock::now();
+      timings[0].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+  
+      // Execute Mul
+      t1 = std::chrono::high_resolution_clock::now();
+      stream->mul();
+      t2 = std::chrono::high_resolution_clock::now();
+      timings[1].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+  
+      // Execute Add
+      t1 = std::chrono::high_resolution_clock::now();
+      stream->add();
+      t2 = std::chrono::high_resolution_clock::now();
+      timings[2].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+  
+      // Execute Triad
+      t1 = std::chrono::high_resolution_clock::now();
+      stream->triad();
+      t2 = std::chrono::high_resolution_clock::now();
+      timings[3].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+  
+      // Execute Dot
+      t1 = std::chrono::high_resolution_clock::now();
+      sum = stream->dot();
+      t2 = std::chrono::high_resolution_clock::now();
+      timings[4].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+  
+  #ifdef PURE_RDWR
+      t1 = std::chrono::high_resolution_clock::now();
+      sum_a = stream->read();
+      t2 = std::chrono::high_resolution_clock::now();
+      timings[5].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+  
+      t1 = std::chrono::high_resolution_clock::now();
+      stream->write();
+      t2 = std::chrono::high_resolution_clock::now();
+      timings[6].push_back(std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count());
+  #endif
+    }
   }
 
   // Check solutions
@@ -425,7 +424,7 @@ void run_triad()
 
 #elif defined(HIP)
   // Use the HIP implementation
-  stream = new HIPStream<T>(ARRAY_SIZE, deviceIndex);
+  stream = new HIPStream<T>(ARRAY_SIZE, deviceIndex, timing, compunits);
 
 #elif defined(OCL)
   // Use the OpenCL implementation
@@ -603,6 +602,22 @@ void parseArguments(int argc, char *argv[])
         exit(EXIT_FAILURE);
       }
     }
+    else if (!std::string("--timing").compare(argv[i]))
+    {
+      if (++i >= argc || !parseUInt(argv[i], &timing))
+      {
+        std::cerr << "Invalid timing setting." << std::endl;
+        exit(EXIT_FAILURE);
+      }
+    }
+    else if (!std::string("--compunits").compare(argv[i]))
+    {
+      if (++i >= argc || !parseUInt(argv[i], &compunits))
+      {
+        std::cerr << "Invalid compute units number." << std::endl;
+        exit(EXIT_FAILURE);
+      }
+    }
     else if (!std::string("--numtimes").compare(argv[i]) ||
              !std::string("-n").compare(argv[i]))
     {
@@ -648,6 +663,8 @@ void parseArguments(int argc, char *argv[])
       std::cout << "      --triad-only         Only run triad" << std::endl;
       std::cout << "      --csv                Output as csv table" << std::endl;
       std::cout << "      --mibibytes          Use MiB=2^20 for bandwidth calculation (default MB=10^6)" << std::endl;
+      std::cout << "      --timing     TYPE    Device kernel timing, or Host+Device (default) timing" << std::endl;
+      std::cout << "      --compunits  NUM     compute unit numbers (default 64, MI50 is 60CU)" << std::endl;
       std::cout << std::endl;
       exit(EXIT_SUCCESS);
     }

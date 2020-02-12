@@ -11,11 +11,10 @@
 //#define TBSIZE 1024
 #define TBSIZE		128			//use small TBSIZE can work for more flexible Array size
 
-#ifdef MI50
-#define DOT_NUM_BLOCKS  (256/64*60)		//MI50 has 60CU, while MI60 has 64CU
-#else
-#define DOT_NUM_BLOCKS  256
-#endif
+#define DOT_NUM_BLOCKS  (256/64*cu_num)		//MI50 has 60CU, while MI60 has 64CU
+
+hipEvent_t start_ev, stop_ev;
+float kernel_time = 0.0f;
 
 template <typename T>
 __global__ void copy_kernel(const T * a, T * c);
@@ -55,7 +54,7 @@ void check_error(void)
 }
 
 template <class T>
-HIPStream<T>::HIPStream(const unsigned int ARRAY_SIZE, const int device_index)
+HIPStream<T>::HIPStream(const unsigned int ARRAY_SIZE, const int device_index, const unsigned int timing, const unsigned int compunits)
 {
 
   if (ARRAY_SIZE % TBSIZE != 0)
@@ -80,6 +79,9 @@ HIPStream<T>::HIPStream(const unsigned int ARRAY_SIZE, const int device_index)
 
   array_size = ARRAY_SIZE;
 
+  timing_mode = timing;
+
+  cu_num = compunits;
   // Allocate the host array for partial sums for dot kernels
   sums = (T*)malloc(sizeof(T) * DOT_NUM_BLOCKS);
 
@@ -224,17 +226,29 @@ T HIPStream<T>::read()
 {
 //  int readNumBlocks = array_size/(4*4*TBSIZE/sizeof(T));
   int readNumBlocks = READ_NUM_BLOCKS;
-#ifdef EXT_KERNEL_TIME
-  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(read_kernel<T>), dim3(readNumBlocks), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, sum_a, array_size);
-  hipEventSynchronize(stop_ev);
-  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
-#else
-//  hipLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_c);
-  hipLaunchKernelGGL(HIP_KERNEL_NAME(read_kernel<T>), dim3(readNumBlocks), dim3(TBSIZE), 0, 0, d_a, sum_a, array_size);
-  check_error();
-  hipDeviceSynchronize();
-  check_error();
-#endif
+
+  if(timing_mode == 1)
+  {
+    hipEventRecord(start_ev);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(read_kernel<T>), dim3(readNumBlocks), dim3(TBSIZE), 0, 0, d_a, sum_a, array_size);
+    hipEventRecord(stop_ev);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else if(timing_mode == 2)
+  {
+    hipExtLaunchKernelGGL(HIP_KERNEL_NAME(read_kernel<T>), dim3(readNumBlocks), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, sum_a, array_size);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+  //  hipLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_c);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(read_kernel<T>), dim3(readNumBlocks), dim3(TBSIZE), 0, 0, d_a, sum_a, array_size);
+    check_error();
+    hipDeviceSynchronize();
+    check_error();
+  }
 
   hipMemcpy(sums_a, sum_a, readNumBlocks*sizeof(T), hipMemcpyDeviceToHost);
   check_error();
@@ -270,16 +284,27 @@ __global__ void write_kernel<double>(double *d)
 template <class T>
 void HIPStream<T>::write()
 {
-#ifdef EXT_KERNEL_TIME
-  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(write_kernel<T>), dim3(array_size/(4*WIDTH*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_d);
-  hipEventSynchronize(stop_ev);
-  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
-#else
-  hipLaunchKernelGGL(HIP_KERNEL_NAME(write_kernel<T>), dim3(array_size/(4*WIDTH*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_d);
-  check_error();
-  hipDeviceSynchronize();
-  check_error();
-#endif
+  if(timing_mode == 1)
+  {
+    hipEventRecord(start_ev);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(write_kernel<T>), dim3(array_size/(4*WIDTH*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_d);
+    hipEventRecord(stop_ev);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else if (timing_mode == 2)
+  {
+    hipExtLaunchKernelGGL(HIP_KERNEL_NAME(write_kernel<T>), dim3(array_size/(4*WIDTH*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_d);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(write_kernel<T>), dim3(array_size/(4*WIDTH*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_d);
+    check_error();
+    hipDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <>
@@ -316,17 +341,28 @@ __global__ void copy_kernel(const T * a, T * c)
 template <class T>
 void HIPStream<T>::copy()
 {
-#ifdef EXT_KERNEL_TIME
-  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, d_c);
-  hipEventSynchronize(stop_ev);
-  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
-#else
-//  hipLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_c);
-  hipLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_c);
-  check_error();
-  hipDeviceSynchronize();
-  check_error();
-#endif
+  if(timing_mode == 1)
+  {
+    hipEventRecord(start_ev);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_c);
+    hipEventRecord(stop_ev);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else if(timing_mode == 2)
+  {
+    hipExtLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, d_c);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+  //  hipLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_c);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(copy_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_c);
+    check_error();
+    hipDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <>
@@ -364,18 +400,29 @@ __global__ void mul_kernel(T * b, const T * c)
 
 template <class T>
 void HIPStream<T>::mul()
-{
-#ifdef EXT_KERNEL_TIME
-  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(mul_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_b, d_c);
-  hipEventSynchronize(stop_ev);
-  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
-#else
-//  hipLaunchKernelGGL(HIP_KERNEL_NAME(mul_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_b, d_c);
-  hipLaunchKernelGGL(HIP_KERNEL_NAME(mul_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_b, d_c);
-  check_error();
-  hipDeviceSynchronize();
-  check_error();
-#endif
+{ 
+  if(timing_mode == 1)
+  {
+    hipEventRecord(start_ev);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(mul_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_b, d_c);
+    hipEventRecord(stop_ev);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else if(timing_mode == 2)
+  {
+    hipExtLaunchKernelGGL(HIP_KERNEL_NAME(mul_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_b, d_c);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+  //  hipLaunchKernelGGL(HIP_KERNEL_NAME(mul_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_b, d_c);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(mul_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_b, d_c);
+    check_error();
+    hipDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <>
@@ -414,17 +461,28 @@ __global__ void add_kernel(const T * a, const T * b, T * c)
 template <class T>
 void HIPStream<T>::add()
 {
-#ifdef EXT_KERNEL_TIME
-  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(add_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, d_b, d_c);
-  hipEventSynchronize(stop_ev);
-  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
-#else
-//  hipLaunchKernelGGL(HIP_KERNEL_NAME(add_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
-  hipLaunchKernelGGL(HIP_KERNEL_NAME(add_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
-  check_error();
-  hipDeviceSynchronize();
-  check_error();
-#endif
+  if(timing_mode == 1)
+  {
+    hipEventRecord(start_ev);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(add_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
+    hipEventRecord(stop_ev);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else if(timing_mode == 2)
+  {
+    hipExtLaunchKernelGGL(HIP_KERNEL_NAME(add_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, d_b, d_c);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+  //  hipLaunchKernelGGL(HIP_KERNEL_NAME(add_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(add_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
+    check_error();
+    hipDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <>
@@ -466,17 +524,28 @@ __global__ void triad_kernel(T * a, const T * b, const T * c)
 template <class T>
 void HIPStream<T>::triad()
 {
-#ifdef EXT_KERNEL_TIME
-  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(triad_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, d_b, d_c);
-  hipEventSynchronize(stop_ev);
-  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
-#else
-//  hipLaunchKernelGGL(HIP_KERNEL_NAME(triad_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
-  hipLaunchKernelGGL(HIP_KERNEL_NAME(triad_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
-  check_error();
-  hipDeviceSynchronize();
-  check_error();
-#endif
+  if(timing_mode == 1) //kernel time
+  {
+    hipEventRecord(start_ev);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(triad_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
+    hipEventRecord(stop_ev);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else if(timing_mode == 2) //ExtLaunch kernel time
+  {
+    hipExtLaunchKernelGGL(HIP_KERNEL_NAME(triad_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, d_b, d_c);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+  //  hipLaunchKernelGGL(HIP_KERNEL_NAME(triad_kernel<T>), dim3(array_size/TBSIZE), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(triad_kernel<T>), dim3(array_size/(4*4*TBSIZE/sizeof(T))), dim3(TBSIZE), 0, 0, d_a, d_b, d_c);
+    check_error();
+    hipDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <>
@@ -582,15 +651,26 @@ __global__ void dot_kernel(const T * a, const T * b, T * sum, unsigned int array
 template <class T>
 T HIPStream<T>::dot()
 {
-#ifdef EXT_KERNEL_TIME
-  hipExtLaunchKernelGGL(HIP_KERNEL_NAME(dot_kernel<T>), dim3(DOT_NUM_BLOCKS), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, d_b, d_sum, array_size);
-  hipEventSynchronize(stop_ev);
-  hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
-#else
-//  hipLaunchKernelGGL(HIP_KERNEL_NAME(dot_kernel<T>), dim3(DOT_NUM_BLOCKS), dim3(TBSIZE), 0, 0, d_a, d_b, d_sum, array_size);
-  hipLaunchKernelGGL(HIP_KERNEL_NAME(dot_kernel<T>), dim3(DOT_NUM_BLOCKS), dim3(TBSIZE), 0, 0, d_a, d_b, d_sum, array_size);
-  check_error();
-#endif
+  if(timing_mode == 1) //kernel time
+  {
+    hipEventRecord(start_ev);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(dot_kernel<T>), dim3(DOT_NUM_BLOCKS), dim3(TBSIZE), 0, 0, d_a, d_b, d_sum, array_size);
+    hipEventRecord(stop_ev);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else if(timing_mode == 2) //ExtLaunch kernel time
+  {
+    hipExtLaunchKernelGGL(HIP_KERNEL_NAME(dot_kernel<T>), dim3(DOT_NUM_BLOCKS), dim3(TBSIZE), 0, 0, start_ev, stop_ev, 0, d_a, d_b, d_sum, array_size);
+    hipEventSynchronize(stop_ev);
+    hipEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+  //  hipLaunchKernelGGL(HIP_KERNEL_NAME(dot_kernel<T>), dim3(DOT_NUM_BLOCKS), dim3(TBSIZE), 0, 0, d_a, d_b, d_sum, array_size);
+    hipLaunchKernelGGL(HIP_KERNEL_NAME(dot_kernel<T>), dim3(DOT_NUM_BLOCKS), dim3(TBSIZE), 0, 0, d_a, d_b, d_sum, array_size);
+    check_error();
+  }
 
   hipMemcpy(sums, d_sum, DOT_NUM_BLOCKS*sizeof(T), hipMemcpyDeviceToHost);
   check_error();

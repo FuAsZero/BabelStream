@@ -149,7 +149,7 @@ void run()
 
 #if defined(CUDA)
   // Use the CUDA implementation
-  stream = new CUDAStream<T>(ARRAY_SIZE, deviceIndex);
+  stream = new CUDAStream<T>(ARRAY_SIZE, deviceIndex, timing);
 
 #elif defined(HIP)
   // Use the HIP implementation
@@ -199,8 +199,13 @@ void run()
 
   if(timing > 0)
   {
+#if defined(HIP)
     hipEventCreate(&start_ev);
     hipEventCreate(&stop_ev);
+#elif defined(CUDA)
+    cudaEventCreate(&start_ev);
+    cudaEventCreate(&stop_ev);
+#endif
   }
 
   // Main loop
@@ -420,7 +425,7 @@ void run_triad()
 
 #if defined(CUDA)
   // Use the CUDA implementation
-  stream = new CUDAStream<T>(ARRAY_SIZE, deviceIndex);
+  stream = new CUDAStream<T>(ARRAY_SIZE, deviceIndex, timing);
 
 #elif defined(HIP)
   // Use the HIP implementation

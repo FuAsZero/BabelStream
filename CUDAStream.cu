@@ -8,6 +8,9 @@
 
 #include "CUDAStream.h"
 
+cudaEvent_t start_ev, stop_ev;
+float kernel_time = 0.0f;
+
 void check_error(void)
 {
   cudaError_t err = cudaGetLastError();
@@ -19,7 +22,7 @@ void check_error(void)
 }
 
 template <class T>
-CUDAStream<T>::CUDAStream(const unsigned int ARRAY_SIZE, const int device_index)
+CUDAStream<T>::CUDAStream(const unsigned int ARRAY_SIZE, const int device_index, const unsigned int timing)
 {
 
   // The array size must be divisible by TBSIZE for kernel launches
@@ -44,6 +47,8 @@ CUDAStream<T>::CUDAStream(const unsigned int ARRAY_SIZE, const int device_index)
   std::cout << "Driver: " << getDeviceDriver(device_index) << std::endl;
 
   array_size = ARRAY_SIZE;
+
+  timing_mode = timing;
 
   // Allocate the host array for partial sums for dot kernels
   sums = (T*)malloc(sizeof(T) * DOT_NUM_BLOCKS);
@@ -123,10 +128,21 @@ __global__ void copy_kernel(const T * a, T * c)
 template <class T>
 void CUDAStream<T>::copy()
 {
-  copy_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_c);
-  check_error();
-  cudaDeviceSynchronize();
-  check_error();
+  if(timing_mode == 1)
+  {
+    cudaEventRecord(start_ev);
+    copy_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_c);
+    cudaEventRecord(stop_ev);
+    cudaEventSynchronize(stop_ev);
+    cudaEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+    copy_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_c);
+    check_error();
+    cudaDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <typename T>
@@ -140,10 +156,21 @@ __global__ void mul_kernel(T * b, const T * c)
 template <class T>
 void CUDAStream<T>::mul()
 {
-  mul_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_b, d_c);
-  check_error();
-  cudaDeviceSynchronize();
-  check_error();
+  if(timing_mode == 1)
+  {
+    cudaEventRecord(start_ev);
+    mul_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_b, d_c);
+    cudaEventRecord(stop_ev);
+    cudaEventSynchronize(stop_ev);
+    cudaEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+    mul_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_b, d_c);
+    check_error();
+    cudaDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <typename T>
@@ -156,10 +183,21 @@ __global__ void add_kernel(const T * a, const T * b, T * c)
 template <class T>
 void CUDAStream<T>::add()
 {
-  add_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_b, d_c);
-  check_error();
-  cudaDeviceSynchronize();
-  check_error();
+  if(timing_mode == 1)
+  {
+    cudaEventRecord(start_ev);
+    add_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_b, d_c);
+    cudaEventRecord(stop_ev);
+    cudaEventSynchronize(stop_ev);
+    cudaEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+    add_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_b, d_c);
+    check_error();
+    cudaDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <typename T>
@@ -173,10 +211,21 @@ __global__ void triad_kernel(T * a, const T * b, const T * c)
 template <class T>
 void CUDAStream<T>::triad()
 {
-  triad_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_b, d_c);
-  check_error();
-  cudaDeviceSynchronize();
-  check_error();
+  if(timing_mode == 1)
+  {
+    cudaEventRecord(start_ev);
+    triad_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_b, d_c);
+    cudaEventRecord(stop_ev);
+    cudaEventSynchronize(stop_ev);
+    cudaEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+    triad_kernel<<<array_size/TBSIZE, TBSIZE>>>(d_a, d_b, d_c);
+    check_error();
+    cudaDeviceSynchronize();
+    check_error();
+  }
 }
 
 template <class T>
@@ -207,8 +256,19 @@ __global__ void dot_kernel(const T * a, const T * b, T * sum, unsigned int array
 template <class T>
 T CUDAStream<T>::dot()
 {
-  dot_kernel<<<DOT_NUM_BLOCKS, TBSIZE>>>(d_a, d_b, d_sum, array_size);
-  check_error();
+  if(timing_mode == 1)
+  {
+    cudaEventRecord(start_ev);
+    dot_kernel<<<DOT_NUM_BLOCKS, TBSIZE>>>(d_a, d_b, d_sum, array_size);
+    cudaEventRecord(stop_ev);
+    cudaEventSynchronize(stop_ev);
+    cudaEventElapsedTime(&kernel_time, start_ev, stop_ev);
+  }
+  else
+  {
+    dot_kernel<<<DOT_NUM_BLOCKS, TBSIZE>>>(d_a, d_b, d_sum, array_size);
+    check_error();
+  }
 
   cudaMemcpy(sums, d_sum, DOT_NUM_BLOCKS*sizeof(T), cudaMemcpyDeviceToHost);
   check_error();

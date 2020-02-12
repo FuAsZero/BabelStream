@@ -18,12 +18,19 @@
 #define TBSIZE 1024
 #define DOT_NUM_BLOCKS 256
 
+#include <cuda_runtime.h>
+extern cudaEvent_t start_ev;
+extern cudaEvent_t stop_ev;
+extern float kernel_time;
+
 template <class T>
 class CUDAStream : public Stream<T>
 {
   protected:
     // Size of arrays
     unsigned int array_size;
+
+    unsigned int timing_mode;
 
     // Host array for partial sums for dot kernel
     T *sums;
@@ -37,7 +44,7 @@ class CUDAStream : public Stream<T>
 
   public:
 
-    CUDAStream(const unsigned int, const int);
+    CUDAStream(const unsigned int, const int, const unsigned int);
     ~CUDAStream();
 
     virtual void copy() override;
